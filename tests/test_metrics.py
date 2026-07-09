@@ -16,10 +16,18 @@ from tracking_cellmot.metrics import (
 
 
 DATA_DIR = DATASET_PATH
-GEFF_PATH = DATA_DIR / "2024_03_22_dorado_0001_0190_1651_0467.geff"
+GEFF_PATH = DATA_DIR / "6bba_c328f2fd.geff"
 
 
 def _load_geff():
+    if not GEFF_PATH.exists():
+        pytest.fail(
+            f"Training dataset geff not found: {GEFF_PATH}.\n"
+            f"The geff-based metric tests use the competition TRAINING data — download it "
+            f"from Kaggle and point CELLMOT_DATA_DIR at the folder containing it "
+            f"(auto-detected on the Kaggle mount).",
+            pytrace=False,
+        )
     result = td.graph.IndexedRXGraph.from_geff(GEFF_PATH)
     return result[0] if isinstance(result, tuple) else result
 

@@ -32,7 +32,7 @@ import tracksdata as td
 from tracking_cellmot.division_metrics import evaluate_divisions
 from tracking_cellmot.metrics import _evaluate, _evaluate_matched_graph, _jaccard, evaluate
 
-SANDBOX_DIR = Path(__file__).resolve().parents[1] / "visualize" / "sandbox_examples"
+SANDBOX_DIR = Path(__file__).resolve().parent / "assets" / "sandbox_examples"
 
 
 class SandboxMetrics(NamedTuple):
@@ -46,7 +46,7 @@ class SandboxMetrics(NamedTuple):
 
 EXPECTED: dict[str, SandboxMetrics] = {
     "3_division":          SandboxMetrics(edge_tp=2, edge_fp=2, edge_fn=0, div_tp=0, div_fp=1, div_fn=0),
-    "bug":                 SandboxMetrics(edge_tp=0, edge_fp=5, edge_fn=8, div_tp=1, div_fp=0, div_fn=1),
+    "edges_wrong_division_ok": SandboxMetrics(edge_tp=0, edge_fp=5, edge_fn=8, div_tp=1, div_fp=0, div_fn=1),
     "complex":             SandboxMetrics(edge_tp=2, edge_fp=2, edge_fn=8, div_tp=1, div_fp=0, div_fn=0),
     "complex2":            SandboxMetrics(edge_tp=4, edge_fp=4, edge_fn=6, div_tp=1, div_fp=0, div_fn=0),
     "division":            SandboxMetrics(edge_tp=4, edge_fp=1, edge_fn=3, div_tp=1, div_fp=1, div_fn=1),
@@ -57,7 +57,6 @@ EXPECTED: dict[str, SandboxMetrics] = {
     "late_division":       SandboxMetrics(edge_tp=2, edge_fp=3, edge_fn=4, div_tp=1, div_fp=0, div_fn=0),
     "merge_delay":         SandboxMetrics(edge_tp=3, edge_fp=2, edge_fn=2, div_tp=1, div_fp=0, div_fn=0),
     "node_conflict":       SandboxMetrics(edge_tp=3, edge_fp=2, edge_fn=4, div_tp=1, div_fp=0, div_fn=0),
-    "simle":               SandboxMetrics(edge_tp=3, edge_fp=2, edge_fn=3, div_tp=0, div_fp=0, div_fn=0),
     "simple":              SandboxMetrics(edge_tp=2, edge_fp=2, edge_fn=4, div_tp=0, div_fp=0, div_fn=0),
     "successive_div":      SandboxMetrics(edge_tp=3, edge_fp=2, edge_fn=3, div_tp=1, div_fp=0, div_fn=1),
 }

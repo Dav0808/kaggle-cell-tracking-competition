@@ -47,11 +47,38 @@ uv run python scripts/predict_unet_transformer.py --method baseline --split 0
 
 ### Evaluation
 
+Score predicted geffs against ground-truth geffs — evaluates the datasets present
+in **both** directories, no images loaded:
+
 ```bash
-uv run python scripts/evaluate.py --method baseline --split 0
+uv run python scripts/evaluate.py \
+    --pred-dir predictions/$USER/baseline/split_0 --gt-dir data/train
 ```
 
-Each run prints the evaluation metrics to the terminal.
+### Submission workflow
+
+Kaggle accepts a CSV upload only, so the full round trip is: predict → geffs,
+geffs → CSV (upload), CSV → geffs, then score locally. The paths chain end to
+end:
+
+```bash
+# 1. Inference — saves one .geff per test dataset into
+#    predictions/<user>/<method>/split_<fold>/ 
+uv run python scripts/predict_unet_transformer.py --method baseline --split 0
+GEFFS=predictions/$USER/baseline/split_0
+
+# 2. geffs -> CSV — the file you upload to Kaggle
+uv run python scripts/geffs_to_csv.py --in-dir "$GEFFS" --csv submission.csv
+
+# 3. (Optional, if CSV is coming from kaggle) CSV -> geffs — reconstruct graphs from any submission CSV
+uv run python scripts/csv_to_geffs.py --csv submission.csv --out-dir out_geffs
+
+# 4. Score against ground-truth geffs
+uv run python scripts/evaluate.py --pred-dir out_geffs --gt-dir data/train
+```
+
+`evaluate.py` scores every dataset whose name appears in **both** `--pred-dir`
+and `--gt-dir` (others are skipped).
 
 ### Visualization
 

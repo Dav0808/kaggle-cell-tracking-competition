@@ -14,16 +14,17 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 _FIXTURE_DIR = Path(__file__).parent / "data" / "division_clip"
 _FIXTURE_NAME = "division_clip"
 
-# Frames [17, 22) from the source video — division at original t=19 → fixture t=2.
-_SRC_START = 17
-_SRC_END = 22
+# Frames [26, 31) from the source video — division at original t=28 → fixture t=2.
+_SRC_NAME = "6bba_c328f2fd"
+_SRC_START = 26
+_SRC_END = 31
 
 
 def _build_division_clip_fixture() -> None:
     """Generate tests/data/division_clip from the source dataset."""
     from dataspec import DATASET_PATH
 
-    src_dir = DATASET_PATH / "2024_03_22_dorado_0002_0198_0184_0605"
+    src_dir = DATASET_PATH / _SRC_NAME
     src_zarr = src_dir.parent / f"{src_dir.name}.zarr"
     src_geff = src_dir.parent / f"{src_dir.name}.geff"
 
@@ -58,9 +59,15 @@ def _build_division_clip_fixture() -> None:
     sliced.to_geff(str(_FIXTURE_DIR / f"{_FIXTURE_NAME}.geff"), overwrite=True)
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="session")
 def division_clip_fixture() -> None:
-    """Ensure the division_clip test fixture exists, building it if necessary."""
+    """Ensure the division_clip test fixture exists, building it if necessary.
+
+    Requested explicitly by the tests that need it (not autouse), so tests
+    that don't touch the training data aren't affected when it's absent.
+    """
+    from dataspec import DATASET_PATH
+
     zarr_path = _FIXTURE_DIR / f"{_FIXTURE_NAME}.zarr"
     geff_ok = (_FIXTURE_DIR / f"{_FIXTURE_NAME}.geff").exists()
     # Rebuild if zarr is missing, geff is missing, or zarr lacks attrs (old fixture).
@@ -69,4 +76,15 @@ def division_clip_fixture() -> None:
         attrs = dict(zarr.open_group(str(zarr_path), mode="r").attrs)
         needs_rebuild = "multiscales" not in attrs or "image_statistics" not in attrs
     if needs_rebuild:
+        src_zarr = DATASET_PATH / f"{_SRC_NAME}.zarr"
+        src_geff = DATASET_PATH / f"{_SRC_NAME}.geff"
+        if not src_zarr.exists() or not src_geff.exists():
+            pytest.fail(
+                f"Cannot build the division_clip fixture: source dataset '{_SRC_NAME}' "
+                f"not found under DATASET_PATH={DATASET_PATH}.\n"
+                f"This test uses the competition TRAINING data — download it from Kaggle "
+                f"and point CELLMOT_DATA_DIR at the folder containing "
+                f"'{_SRC_NAME}.zarr' and '{_SRC_NAME}.geff' (auto-detected on the Kaggle mount).",
+                pytrace=False,
+            )
         _build_division_clip_fixture()

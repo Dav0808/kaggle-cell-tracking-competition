@@ -56,7 +56,9 @@ def _seed_everything(seed: int = 42) -> None:
 
 @pytest.mark.slow
 @pytest.mark.parametrize("window_size", [2])
-def test_unet_transformer_overfit_and_evaluate(tmp_path: Path, window_size: int) -> None:
+def test_unet_transformer_overfit_and_evaluate(
+    tmp_path: Path, window_size: int, division_clip_fixture: None
+) -> None:
     """Train UNet transformer on a single video, predict, and assert jaccard == 1."""
     _seed_everything()
 
@@ -68,11 +70,11 @@ def test_unet_transformer_overfit_and_evaluate(tmp_path: Path, window_size: int)
         fold=0,
         splits_file=_FIXTURE_DIR / "dataset_splits.json",  # ignored when debug_video is set
         method="unet_transformer",
-        n_epochs=10,
+        n_epochs=40,
         lr=1e-3,
         batch_size=32,
         num_workers=8,
-        max_iters=200,
+        max_iters=400,
         unet_out_channels=_TEST_CONFIG["unet_out_channels"],
         unet_layers=_TEST_CONFIG["unet_layers"],
         downsample=tuple(_TEST_CONFIG["downsample"]),

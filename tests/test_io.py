@@ -13,8 +13,21 @@ from dataspec import DATASET_PATH
 
 DATA_DIR = DATASET_PATH
 # A dataset with a loadable geff
-DS_NAME = "2024_03_22_dorado_0001_0190_1651_0467"
+DS_NAME = "6bba_c328f2fd"
 DS_PATH = DATA_DIR / DS_NAME
+
+
+@pytest.fixture(autouse=True)
+def _require_training_data() -> None:
+    """Fail with actionable guidance if the Kaggle training data is missing."""
+    if not (DATA_DIR / f"{DS_NAME}.zarr").exists() or not (DATA_DIR / f"{DS_NAME}.geff").exists():
+        pytest.fail(
+            f"Training dataset '{DS_NAME}' not found under DATASET_PATH={DATA_DIR}.\n"
+            f"These tests use the competition TRAINING data — download it from Kaggle and "
+            f"point CELLMOT_DATA_DIR at the folder containing '{DS_NAME}.zarr' and "
+            f"'{DS_NAME}.geff' (auto-detected on the Kaggle mount).",
+            pytrace=False,
+        )
 
 
 # ---------------------------------------------------------------------------

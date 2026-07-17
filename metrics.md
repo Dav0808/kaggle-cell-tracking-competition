@@ -2,8 +2,9 @@
 
 A tracking graph has nodes (cell detections with a timepoint and centroid)
 and directed edges linking a cell at one timepoint to the same cell — or its
-daughters — at the next. A **cell division** is a node with exactly two
-outgoing edges.
+daughters — at the next. A ground-truth **cell division** has exactly two
+outgoing edges. During evaluation, any predicted node with at least two
+outgoing edges is treated as a predicted fork.
 
 ## Edge Jaccard
 
@@ -49,46 +50,81 @@ truth doesn't annotate), and `a = 0.1` is the weighting coefficient.
 
 ## Division Jaccard
 
-The exact timepoint at which a cell visibly splits is somewhat
-subjective, so we score divisions with a tolerance of ±1 timepoint on
-either side of the ground-truth split.
+The exact timepoint at which a cell visibly splits is somewhat subjective,
+so the division metric uses a local window around each GT split:
 
-For each ground-truth division (a GT node that splits into two children,
-with its parent and grandchildren included for context), we ask whether
-the prediction contains a corresponding split. A GT division is a
-**true positive (TP)** when a predicted fork can be paired with it
-under *all* of the following criteria:
+```
+grandparent → dividing parent → children → grandchildren
+```
 
-- **One-node-stage coverage.** The prediction has at least one matched
-  node at a pre-split timepoint of the GT division (parent or divider
-  era), anchoring the pre-division track.
-- **Both daughter lineages touched.** The prediction has matched nodes
-  in each of the two daughter lineages of the GT divider, where a
-  lineage is one child plus its descendants inside the division
-  subgraph. Hits in the two lineages may occur at *different*
-  timepoints — the two daughters don't have to be predicted
-  simultaneously, which absorbs ±1-timepoint offsets in when the split
-  becomes visible.
-- **Single connected component.** All the matched predicted nodes
-  above lie in one connected component of the predicted graph.
-- **Contains a predicted fork.** The component includes at least one
-  predicted dividing node (a predicted cell with two outgoing edges).
+This window permits a predicted fork one timepoint before or after the GT
+split without using graph-wide reachability. Predicted nodes are matched
+independently against each GT division window with the same timepoint-aware,
+7 µm optimal assignment used by the edge metric.
 
-A GT division that fails any of these is a **false negative (FN)**.
+### True positives and false negatives
 
-A predicted dividing cell whose match lands on a GT cell with outgoing
-edges (so the region is annotated) but that is not paired to any GT
-division by the bipartite matching is a **false positive (FP)**.
-Predicted divisions in unannotated regions are ignored, mirroring the
-edge rule.
+A predicted fork can recover a GT division only when all these conditions
+hold:
 
-The division Jaccard is then `TP / (TP + FP + FN)`.
+- **Local parent anchor.** At least one prediction node matches the GT dividing
+  parent or its immediate predecessor. The predicted fork must be one of these
+  matched parent-side nodes or an immediate successor of one.
+- **Two distinct daughter branches.** Each GT daughter lineage consists of one
+  child and its immediate children. Each predicted branch likewise consists of
+  one direct child of the fork and that child's immediate children. A bipartite
+  matching must associate the two GT daughter lineages with two different
+  predicted branches. The two supporting matches may occur at different
+  timepoints within the window.
+- **Directed local topology.** The parent anchor must be the predicted fork or
+  its immediate predecessor, and the daughter matches must lie downstream of
+  the fork on their assigned branches. Merely sharing a weakly connected
+  component is not sufficient.
+- **Valid branch evidence.** A predicted fork is rejected if two of its child
+  branches have matched evidence in different reliable GT connected
+  components. A matched direct child supplies its branch's component. If the
+  child is unmatched, an unambiguous matched grandchild may supply it instead.
+  If fallback grandchildren in one branch point to several GT components,
+  that branch supplies no component evidence for the parent fork. Direct-child
+  evidence takes precedence, so downstream mistakes do not invalidate
+  correctly matched children.
+- **Unmerged branches.** A direct child used by the fork must have that fork as
+  its sole parent. When grandchild fallback is needed, each grandchild must
+  belong to that child alone. A locally merged or shared branch is rejected.
+
+Candidate GT divisions and predicted forks are then paired by a
+maximum-cardinality bipartite matching. One predicted fork can recover at most
+one GT division, and one GT division can receive at most one predicted fork.
+Every paired GT division is a **true positive (TP)**; every unpaired GT
+division is a **false negative (FN)**.
+
+### False positives
+
+A predicted fork that is not a TP is a **false positive (FP)** when any of the
+following supplies enough evidence to evaluate it:
+
+- the fork itself matches a GT node with outgoing edges, which means that part
+  of the GT lineage is annotated;
+- it is a local candidate for a GT division but fails directed topology or is
+  left over after bipartite pairing;
+- two distinct child branches have nearest matched evidence in different GT
+  connected components; or
+- its local branches merge and therefore cannot represent distinct daughter
+  paths.
+
+These categories are combined as sets of predicted fork IDs, so a fork caught
+by several rules counts only once. An unmatched fork can therefore still be an
+FP when its child or grandchild matches provide cross-component evidence.
+Otherwise, unmatched, structurally valid forks with no local GT evidence are
+ignored.
+
+The division Jaccard is `TP / (TP + FP + FN)`.
 
 ![Division Jaccard on the `simple` example](assets/division.svg)
 
-
 ![Division Jaccard on the `simple` example](assets/late_division.svg)
-*A predicted fork that occurs one timepoint after the ground-truth split, it is still counted as a TP in our division metrics.*
+*A predicted fork one timepoint after the ground-truth split still counts as a
+TP when it satisfies the local topology rules.*
 
 ## Final score
 

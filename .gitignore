@@ -21,3 +21,4 @@ videos/
 
 # Local config
 .env
+/kaggle_csvs

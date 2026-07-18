@@ -32,7 +32,7 @@ def _default_dataset_path() -> Path:
         return Path(env)
     if _KAGGLE_TRAIN.exists():
         return _KAGGLE_TRAIN
-    return _BASE / "data/dense_channel"
+    return _BASE / "data/train"
 
 
 DATASET_PATH = _default_dataset_path()

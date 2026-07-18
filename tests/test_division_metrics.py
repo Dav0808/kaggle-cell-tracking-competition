@@ -5,6 +5,7 @@ import tracksdata as td
 
 from tracking_cellmot.division_metrics import (
     DivisionCounts,
+    _is_strongly_connected_division,
     count_matched_pred_divisions,
     evaluate_divisions,
     extract_divisions,
@@ -214,13 +215,76 @@ def _make_gt():
     return _build_graph(_GT_NODES, _GT_EDGES)
 
 
+_TWO_COMPONENT_NODES = {
+    "A1": {"t": 1, "z": 0.0, "y": 0.0, "x": 0.0},
+    "A2": {"t": 2, "z": 0.0, "y": 0.0, "x": 0.0},
+    "B1": {"t": 1, "z": 0.0, "y": 20.0, "x": 0.0},
+    "B2": {"t": 2, "z": 0.0, "y": 20.0, "x": 0.0},
+}
+_TWO_COMPONENT_EDGES = [("A1", "A2"), ("B1", "B2")]
+
+
+class TestStronglyConnectedDivision:
+    def test_accepts_local_division_window(self):
+        """Grandparent, child, and grandchild matches are in the window."""
+        pred, ids = _build_graph(
+            {
+                "GP": {"t": 0, "z": 0.0, "y": 0.0, "x": 0.0},
+                "P":  {"t": 1, "z": 0.0, "y": 0.0, "x": 0.0},
+                "C1": {"t": 2, "z": 0.0, "y": 1.0, "x": 0.0},
+                "C2": {"t": 2, "z": 0.0, "y": -1.0, "x": 0.0},
+                "G2": {"t": 3, "z": 0.0, "y": -1.0, "x": 0.0},
+            },
+            [("GP", "P"), ("P", "C1"), ("P", "C2"), ("C2", "G2")],
+        )
+
+        assert _is_strongly_connected_division(
+            pred, ids["P"], {ids["GP"]}, [{ids["C1"]}, {ids["G2"]}]
+        )
+
+    def test_rejects_great_grandchild_match(self):
+        """Nodes beyond grandchildren are outside the division window."""
+        pred, ids = _build_graph(
+            {
+                "P":   {"t": 0, "z": 0.0, "y": 0.0, "x": 0.0},
+                "C1":  {"t": 1, "z": 0.0, "y": 1.0, "x": 0.0},
+                "C2":  {"t": 1, "z": 0.0, "y": -1.0, "x": 0.0},
+                "G2":  {"t": 2, "z": 0.0, "y": -1.0, "x": 0.0},
+                "GG2": {"t": 3, "z": 0.0, "y": -1.0, "x": 0.0},
+            },
+            [("P", "C1"), ("P", "C2"), ("C2", "G2"), ("G2", "GG2")],
+        )
+
+        assert not _is_strongly_connected_division(
+            pred, ids["P"], {ids["P"]}, [{ids["C1"]}, {ids["GG2"]}]
+        )
+
+    def test_requires_distinct_pred_daughter_lineages(self):
+        """Two GT daughters on one pred branch cannot exploit a dummy fork."""
+        pred, ids = _build_graph(
+            {
+                "P": {"t": 0, "z": 0.0, "y": 0.0, "x": 0.0},
+                "C": {"t": 1, "z": 0.0, "y": 1.0, "x": 0.0},
+                "G": {"t": 2, "z": 0.0, "y": 1.0, "x": 0.0},
+                "X": {"t": 1, "z": 0.0, "y": 20.0, "x": 0.0},
+            },
+            [("P", "C"), ("P", "X"), ("C", "G")],
+        )
+
+        assert not _is_strongly_connected_division(
+            pred, ids["P"], {ids["P"]}, [{ids["C"]}, {ids["G"]}]
+        )
+
+
 class TestScoreDivisions:
     def test_perfect_prediction(self):
         """Exact copy of GT → 1."""
         gt, _ = _make_gt()
         pred, _ = _build_graph(_GT_NODES, _GT_EDGES)
-        scores = score_divisions(pred, gt, max_distance=1.0)
-        assert all(v == 1 for v in scores.values())
+        result = score_divisions(pred, gt, max_distance=1.0)
+        assert all(v == 1 for v in result.scores.values())
+        assert len(result.tp_forks) == 1
+        assert result.fp_forks == set()
 
     def test_disconnected_child(self):
         """One daughter not connected to the rest → 0."""
@@ -229,7 +293,7 @@ class TestScoreDivisions:
             _GT_NODES,
             [("P", "D"), ("D", "C1"), ("C1", "G1"), ("C2", "G2")],  # no D→C2
         )
-        scores = score_divisions(pred, gt, max_distance=1.0)
+        scores = score_divisions(pred, gt, max_distance=1.0).scores
         assert all(v == 0 for v in scores.values())
 
     def test_linear_no_fork(self):
@@ -245,7 +309,7 @@ class TestScoreDivisions:
             },
             [("P", "D"), ("D", "C1"), ("C1", "G1")],
         )
-        scores = score_divisions(pred, gt, max_distance=1.0)
+        scores = score_divisions(pred, gt, max_distance=1.0).scores
         assert all(v == 0 for v in scores.values())
 
     def test_no_matched_nodes(self):
@@ -258,8 +322,31 @@ class TestScoreDivisions:
             },
             [("X", "Y")],
         )
-        scores = score_divisions(pred, gt, max_distance=1.0)
+        scores = score_divisions(pred, gt, max_distance=1.0).scores
         assert all(v == 0 for v in scores.values())
+
+    def test_rejected_local_fork_is_false_positive(self):
+        """A dummy branch cannot make two matches on one lineage a TP."""
+        gt, gt_ids = _make_gt()
+        pred, pred_ids = _build_graph(
+            {
+                "P":  {"t": 0, "z": 0.0, "y": 0.0, "x": 0.0},
+                "D":  {"t": 1, "z": 0.0, "y": 0.0, "x": 0.0},
+                "C1": {"t": 2, "z": 0.0, "y": 5.0, "x": 0.0},
+                "X":  {"t": 2, "z": 0.0, "y": 50.0, "x": 0.0},
+                "G2": {"t": 3, "z": 0.0, "y": -5.0, "x": 0.0},
+            },
+            [("P", "D"), ("D", "C1"), ("D", "X"), ("C1", "G2")],
+        )
+
+        result = score_divisions(pred, gt, max_distance=1.0)
+
+        assert result.scores[gt_ids["D"]] == 0
+        assert result.tp_forks == set()
+        assert result.fp_forks == {pred_ids["D"]}
+        assert evaluate_divisions(pred, gt, max_distance=1.0) == DivisionCounts(
+            tp=0, fn=1, fp=1,
+        )
 
     def test_fork_but_wrong_topology(self):
         """Pred has two nodes at t=2 but they belong to different tracks → 0."""
@@ -276,7 +363,7 @@ class TestScoreDivisions:
             },
             [("P", "D"), ("D", "C1"), ("C1", "G1"), ("C2", "G2")],  # C2 disconnected
         )
-        scores = score_divisions(pred, gt, max_distance=1.0)
+        scores = score_divisions(pred, gt, max_distance=1.0).scores
         assert all(v == 0 for v in scores.values())
 
     def test_two_divisions_mixed_scores(self):
@@ -326,7 +413,7 @@ class TestScoreDivisions:
                 ("P2", "D2"), ("D2", "C2a"), ("C2a", "C2a2"),
             ],
         )
-        scores = score_divisions(pred, gt, max_distance=1.0)
+        scores = score_divisions(pred, gt, max_distance=1.0).scores
         assert scores[gt_ids["D1"]] == 1
         assert scores[gt_ids["D2"]] == 0
 
@@ -346,7 +433,7 @@ class TestScoreDivisions:
             },
             [("A", "B")],
         )
-        assert score_divisions(pred, gt, max_distance=1.0) == {}
+        assert score_divisions(pred, gt, max_distance=1.0).scores == {}
 
     def test_connected_via_intermediate_nodes(self):
         """Matched nodes are connected through unmatched intermediate nodes → 1."""
@@ -362,7 +449,7 @@ class TestScoreDivisions:
             },
             [("P", "D"), ("D", "M"), ("M", "C1"), ("M", "C2")],
         )
-        scores = score_divisions(pred, gt, max_distance=1.0)
+        scores = score_divisions(pred, gt, max_distance=1.0).scores
         assert all(v == 1 for v in scores.values())
 
     def test_matched_parent_from_different_track(self):
@@ -414,7 +501,7 @@ class TestScoreDivisions:
                 ("Q1", "Q2"), ("Q2", "Q3"),
             ],
         )
-        scores = score_divisions(pred, gt, max_distance=5.0)
+        scores = score_divisions(pred, gt, max_distance=5.0).scores
         assert all(v == 1 for v in scores.values())
 
 
@@ -577,6 +664,135 @@ class TestEvaluateDivisions:
         )
         counts = evaluate_divisions(pred, gt, max_distance=1.0)
         assert counts == DivisionCounts(tp=0, fn=0, fp=1)
+
+    def test_children_matched_to_distinct_gt_components_are_one_fp(self):
+        """Cross-component evidence and a matched parent count the fork once."""
+        gt, _ = _build_graph(
+            {
+                "A0": {"t": 0, "z": 0.0, "y": 0.0, "x": 0.0},
+                "A1": {"t": 1, "z": 0.0, "y": 0.0, "x": 0.0},
+                "B0": {"t": 0, "z": 0.0, "y": 20.0, "x": 0.0},
+                "B1": {"t": 1, "z": 0.0, "y": 20.0, "x": 0.0},
+            },
+            [("A0", "A1"), ("B0", "B1")],
+        )
+        pred, pred_ids = _build_graph(
+            {
+                "P":  {"t": 0, "z": 0.0, "y": 0.0, "x": 0.0},
+                "C1": {"t": 1, "z": 0.0, "y": 0.0, "x": 0.0},
+                "C2": {"t": 1, "z": 0.0, "y": 20.0, "x": 0.0},
+            },
+            [("P", "C1"), ("P", "C2")],
+        )
+
+        result = score_divisions(pred, gt, max_distance=1.0)
+        assert result.fp_forks == {pred_ids["P"]}
+        assert evaluate_divisions(pred, gt, max_distance=1.0) == DivisionCounts(
+            tp=0, fn=0, fp=1,
+        )
+
+    def test_cross_component_rule_requires_two_matched_branches(self):
+        """One branch with no matched child or grandchild provides no evidence."""
+        gt, _ = _build_graph(
+            {
+                "A0": {"t": 0, "z": 0.0, "y": 0.0, "x": 0.0},
+                "A1": {"t": 1, "z": 0.0, "y": 0.0, "x": 0.0},
+                "B0": {"t": 0, "z": 0.0, "y": 20.0, "x": 0.0},
+                "B1": {"t": 1, "z": 0.0, "y": 20.0, "x": 0.0},
+            },
+            [("A0", "A1"), ("B0", "B1")],
+        )
+        pred, _ = _build_graph(
+            {
+                "P": {"t": 0, "z": 0.0, "y": 10.0, "x": 0.0},
+                "C": {"t": 1, "z": 0.0, "y": 0.0, "x": 0.0},
+                "X": {"t": 1, "z": 0.0, "y": 50.0, "x": 0.0},
+            },
+            [("P", "C"), ("P", "X")],
+        )
+
+        assert evaluate_divisions(pred, gt, max_distance=1.0) == DivisionCounts(
+            tp=0, fn=0, fp=0,
+        )
+
+    def test_uses_grandchild_when_direct_child_is_unmatched(self):
+        """A grandchild can supply sparse-label evidence for its branch."""
+        gt, _ = _build_graph(_TWO_COMPONENT_NODES, _TWO_COMPONENT_EDGES)
+        pred, pred_ids = _build_graph(
+            {
+                "F": {"t": 0, "z": 0.0, "y": 10.0, "x": 0.0},
+                "A": {"t": 1, "z": 0.0, "y": 0.0, "x": 0.0},
+                "U": {"t": 1, "z": 0.0, "y": 40.0, "x": 0.0},
+                "B": {"t": 2, "z": 0.0, "y": 20.0, "x": 0.0},
+            },
+            [("F", "A"), ("F", "U"), ("U", "B")],
+        )
+
+        result = score_divisions(pred, gt, max_distance=1.0)
+        assert result.fp_forks == {pred_ids["F"]}
+
+    def test_does_not_mix_child_and_grandchild_from_one_branch(self):
+        """Matches at two depths on one branch are not two division branches."""
+        gt, _ = _build_graph(_TWO_COMPONENT_NODES, _TWO_COMPONENT_EDGES)
+        pred, _ = _build_graph(
+            {
+                "F": {"t": 0, "z": 0.0, "y": 10.0, "x": 0.0},
+                "A": {"t": 1, "z": 0.0, "y": 0.0, "x": 0.0},
+                "U": {"t": 1, "z": 0.0, "y": 40.0, "x": 0.0},
+                "B": {"t": 2, "z": 0.0, "y": 20.0, "x": 0.0},
+            },
+            [("F", "A"), ("F", "U"), ("A", "B")],
+        )
+
+        assert evaluate_divisions(pred, gt, max_distance=1.0) == DivisionCounts(
+            tp=0, fn=0, fp=0,
+        )
+
+    def test_matched_children_take_precedence_over_wrong_grandchildren(self):
+        """Downstream component switches do not invalidate a correct division."""
+        gt_nodes = {
+            **_GT_NODES,
+            "X2": {"t": 2, "z": 0.0, "y": 40.0, "x": 0.0},
+            "X3": {"t": 3, "z": 0.0, "y": 40.0, "x": 0.0},
+            "Y2": {"t": 2, "z": 0.0, "y": -40.0, "x": 0.0},
+            "Y3": {"t": 3, "z": 0.0, "y": -40.0, "x": 0.0},
+        }
+        gt, _ = _build_graph(
+            gt_nodes,
+            [*_GT_EDGES, ("X2", "X3"), ("Y2", "Y3")],
+        )
+        pred, _ = _build_graph(
+            {
+                "P": _GT_NODES["P"],
+                "D": _GT_NODES["D"],
+                "C1": _GT_NODES["C1"],
+                "C2": _GT_NODES["C2"],
+                "W1": gt_nodes["X3"],
+                "W2": gt_nodes["Y3"],
+            },
+            [("P", "D"), ("D", "C1"), ("D", "C2"),
+             ("C1", "W1"), ("C2", "W2")],
+        )
+
+        assert evaluate_divisions(pred, gt, max_distance=1.0) == DivisionCounts(
+            tp=1, fn=0, fp=0,
+        )
+
+    def test_merged_grandchild_makes_fork_malformed(self):
+        """A grandchild shared by two child roots cannot prove distinct branches."""
+        gt, _ = _build_graph(_TWO_COMPONENT_NODES, _TWO_COMPONENT_EDGES)
+        pred, pred_ids = _build_graph(
+            {
+                "F": {"t": 0, "z": 0.0, "y": 10.0, "x": 0.0},
+                "U1": {"t": 1, "z": 0.0, "y": 40.0, "x": 0.0},
+                "U2": {"t": 1, "z": 0.0, "y": 50.0, "x": 0.0},
+                "G": {"t": 2, "z": 0.0, "y": 0.0, "x": 0.0},
+            },
+            [("F", "U1"), ("F", "U2"), ("U1", "G"), ("U2", "G")],
+        )
+
+        result = score_divisions(pred, gt, max_distance=1.0)
+        assert result.fp_forks == {pred_ids["F"]}
 
     def test_mixed_tp_fn_fp(self):
         """Two GT divisions: one correct, one missed, plus a spurious one."""

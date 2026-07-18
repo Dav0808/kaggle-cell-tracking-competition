@@ -330,7 +330,7 @@ def test_extra_edge_at_track_start_not_penalized():
 
 
 def test_spurious_edge_to_gt_interior_is_penalized():
-    """Spurious edges involving GT nodes with known degree are penalized; others are not.
+    """Spurious edges are judged only when they span a single forward time step.
 
     GT graph (3 nodes, 2 edges):
 
@@ -341,21 +341,25 @@ def test_spurious_edge_to_gt_interior_is_penalized():
     B: out_deg=1, in_deg=1  (interior)
     C: out_deg=0, in_deg=1  (track end)
 
-    D is an unmatched background node far from all GT nodes.
+    D is an unmatched background node at t=1, far from all GT nodes.
 
-    An edge is penalized (pred_valid=True) when we have GT evidence to judge it:
+    Edges are pre-filtered to keep only those spanning exactly one forward step
+    (t_target == t_source + 1). Backward and same-frame edges are dropped
+    entirely — neither TP, FP, nor FN — so they cannot affect the score. A
+    surviving edge is then penalized (pred_valid=True) when we have GT evidence
+    to judge it:
       - source matched to GT node with out_deg>0: we know its true targets
       - target matched to GT node with in_deg>0: we know its true parents
 
-    Incoming to GT nodes (D→?):
-      D→A: NOT penalized — A has in_deg=0, so we don't know A's parents
-      D→B: penalized     — B has in_deg=1, so D→B is a known false positive
-      D→C: penalized     — C has in_deg=1, so D→C is a known false positive
+    Incoming to GT nodes (D at t=1):
+      D→A: t=1→0, backward   → dropped   → score 1.0
+      D→B: t=1→1, same frame → dropped   → score 1.0
+      D→C: t=1→2, forward    → penalized (C.in_deg=1) → score 2/3
 
-    Outgoing from GT nodes (?→D):
-      A→D: penalized     — A has out_deg=1, so A→D is a known false positive
-      B→D: penalized     — B has out_deg=1, so B→D is a known false positive
-      C→D: NOT penalized — C has out_deg=0, so we don't know C's successors
+    Outgoing from GT nodes (D at t=1):
+      A→D: t=0→1, forward    → penalized (A.out_deg=1) → score 2/3
+      B→D: t=1→1, same frame → dropped   → score 1.0
+      C→D: t=2→1, backward   → dropped   → score 1.0
     """
     import copy
 
@@ -365,7 +369,7 @@ def test_spurious_edge_to_gt_interior_is_penalized():
         "C": {"t": 2, "z": 0.0, "y": 0.0, "x": 0.0},
     }
     D_node = {"t": 1, "z": 100.0, "y": 100.0, "x": 100.0}
-    PERFECT = 2 / 3  # Jaccard = 2 / (2 + 3 - 2) when 1 FP is added
+    PENALIZED = 2 / 3  # Jaccard = 2 / (2 + 3 - 2) when 1 valid-timing FP is added
 
     def _build(nodes, edges):
         g = td.graph.InMemoryGraph()
@@ -386,33 +390,33 @@ def test_spurious_edge_to_gt_interior_is_penalized():
         nodes = {**copy.deepcopy(gt_nodes), "D": copy.deepcopy(D_node)}
         return _build(nodes, [("A", "B"), ("B", "C"), extra_edge])
 
-    # D→A: A has in_deg=0 → NOT penalized
+    # D→A: t=1→0 backward → dropped
     score = _jaccard_of(pred_with_extra(("D", "A")), fresh_gt(), max_distance=5.0)
-    assert score == pytest.approx(1.0), f"D→A should NOT be penalized, got {score:.4f}"
+    assert score == pytest.approx(1.0), f"D→A is backward, should be dropped, got {score:.4f}"
 
-    # D→B: B has in_deg=1 → penalized
+    # D→B: t=1→1 same frame → dropped
     score = _jaccard_of(pred_with_extra(("D", "B")), fresh_gt(), max_distance=5.0)
-    assert score == pytest.approx(PERFECT), f"D→B SHOULD be penalized, got {score:.4f}"
+    assert score == pytest.approx(1.0), f"D→B is same-frame, should be dropped, got {score:.4f}"
 
-    # D→C: C has in_deg=1 → penalized
+    # D→C: t=1→2 forward → penalized (C.in_deg=1)
     score = _jaccard_of(pred_with_extra(("D", "C")), fresh_gt(), max_distance=5.0)
-    assert score == pytest.approx(PERFECT), f"D→C SHOULD be penalized, got {score:.4f}"
+    assert score == pytest.approx(PENALIZED), f"D→C SHOULD be penalized, got {score:.4f}"
 
-    # A→D: A has out_deg=1 → penalized
+    # A→D: t=0→1 forward → penalized (A.out_deg=1)
     score = _jaccard_of(pred_with_extra(("A", "D")), fresh_gt(), max_distance=5.0)
-    assert score == pytest.approx(PERFECT), f"A→D SHOULD be penalized, got {score:.4f}"
+    assert score == pytest.approx(PENALIZED), f"A→D SHOULD be penalized, got {score:.4f}"
 
-    # B→D: B has out_deg=1 → penalized
+    # B→D: t=1→1 same frame → dropped
     score = _jaccard_of(pred_with_extra(("B", "D")), fresh_gt(), max_distance=5.0)
-    assert score == pytest.approx(PERFECT), f"B→D SHOULD be penalized, got {score:.4f}"
+    assert score == pytest.approx(1.0), f"B→D is same-frame, should be dropped, got {score:.4f}"
 
-    # C→D: C has out_deg=0 → NOT penalized
+    # C→D: t=2→1 backward → dropped
     score = _jaccard_of(pred_with_extra(("C", "D")), fresh_gt(), max_distance=5.0)
-    assert score == pytest.approx(1.0), f"C→D should NOT be penalized, got {score:.4f}"
+    assert score == pytest.approx(1.0), f"C→D is backward, should be dropped, got {score:.4f}"
 
 
-def test_division_spurious_child_and_missing_child_penalized():
-    """Division edges are fully annotated — extra or missing children are penalized.
+def test_division_extra_child_dropped_and_missing_child_penalized():
+    """A dropped-by-cap extra child is not penalized; a missing child is.
 
     GT graph (4 nodes, 3 edges, B divides):
 
@@ -427,7 +431,9 @@ def test_division_spurious_child_and_missing_child_penalized():
 
     E is an unmatched background node far from all GT nodes.
 
-    B→E: penalized — B has out_deg=2, so all B's children are known; E is not one of them.
+    B→E: dropped — adding it gives B three children (B→C, B→D, B→E); the out-degree
+        cap keeps the two lowest edge ids (B→C, B→D) and drops the highest (B→E),
+        so the spurious child is invisible and the score stays 1.0.
     B→C missing (pred = A→B, B→D only): penalized — B→C is a known GT edge that's absent.
     """
     import copy
@@ -460,15 +466,15 @@ def test_division_spurious_child_and_missing_child_penalized():
     score = _jaccard_of(pred, fresh_gt(), max_distance=5.0)
     assert score == pytest.approx(1.0), f"Perfect division should be 1.0, got {score:.4f}"
 
-    # B→E: spurious extra child — penalized (B has out_deg=2, so B's children are known)
+    # B→E: spurious 3rd child — dropped by the out-degree cap (highest edge id)
     pred_nodes = {
         **copy.deepcopy(gt_nodes),
         "E": {"t": 2, "z": 100.0, "y": 100.0, "x": 100.0},
     }
     pred = _build(pred_nodes, [("A", "B"), ("B", "C"), ("B", "D"), ("B", "E")])
     score = _jaccard_of(pred, fresh_gt(), max_distance=5.0)
-    # intersection=3, gt_edges=3, valid_pred=4 → 3/(3+4-3) = 3/4
-    assert score == pytest.approx(3 / 4), f"B→E should be penalized, got {score:.4f}"
+    # B→E dropped → intersection=3, gt_edges=3, valid_pred=3 → 3/3 = 1.0
+    assert score == pytest.approx(1.0), f"B→E should be dropped by cap, got {score:.4f}"
 
     # B→C missing: predict A→B and B→D only — penalized (B→C is a known GT edge)
     pred = _build(copy.deepcopy(gt_nodes), [("A", "B"), ("B", "D")])
@@ -709,16 +715,19 @@ def test_score_bounds_unit():
     assert _compute_score(df, gt_num_edges=3, metric="dice") == pytest.approx(0.0)
 
 
-def test_cross_track_interior_edge_penalized():
-    """An edge between interior nodes of DIFFERENT tracks is correctly penalized.
+def test_cross_track_edge_penalized_only_when_forward():
+    """A cross-track edge is judged only when it spans a single forward step.
 
     GT:
         Track 1: A → B → C  (B interior: out_deg=1, in_deg=1)
         Track 2: D → E → F  (E interior: out_deg=1, in_deg=1)
 
-    Pred: all correct edges + B→E (cross-track FP)
+        t=0     t=1     t=2
+         A ────► B ────► C
+         D ────► E ────► F
 
-    B→E: source B has out_deg=1 → out_valid=True → penalized ✓
+    B→E is a same-frame edge (both at t=1) → dropped entirely → score stays 1.0.
+    B→F spans one forward step (t=1→2); B.out_deg=1 so it is a known FP → penalized.
     """
     nodes = {
         "A": {"t": 0, "z": 0.0, "y": 0.0, "x": 0.0},
@@ -729,12 +738,18 @@ def test_cross_track_interior_edge_penalized():
         "F": {"t": 2, "z": 0.0, "y": 50.0, "x": 0.0},
     }
     gt_edges = [("A", "B"), ("B", "C"), ("D", "E"), ("E", "F")]
-
     gt = _build_graph(nodes, gt_edges)
+
+    # Same-frame cross-track edge B→E is dropped → no penalty.
     pred = _build_graph(nodes, gt_edges + [("B", "E")])
     score = _jaccard_of(pred, gt, max_distance=1.0)
+    assert score == pytest.approx(1.0), f"Same-frame cross-track edge should be dropped, got {score:.4f}"
+
+    # Forward cross-track edge B→F is a valid-timing FP → penalized.
     # intersection=4, gt=4, valid_pred=5 → 4/(4+5-4)=4/5
-    assert score == pytest.approx(4 / 5), f"Cross-track interior edge should be penalized, got {score:.4f}"
+    pred = _build_graph(nodes, gt_edges + [("B", "F")])
+    score = _jaccard_of(pred, gt, max_distance=1.0)
+    assert score == pytest.approx(4 / 5), f"Forward cross-track edge should be penalized, got {score:.4f}"
 
 
 def test_reparenting_node_penalized():
@@ -928,21 +943,21 @@ def test_spoiler_node_steals_match():
     assert score == pytest.approx(0.0), f"Spoiler should steal match, got {score:.4f}"
 
 
-def test_self_loops_on_interior_nodes_penalized():
-    """Self-loops on GT-interior nodes are penalized (source has out_deg>0).
+def test_self_loops_on_interior_nodes_dropped():
+    """Self-loops are same-frame edges (Δt=0) and are dropped, not penalized.
 
-    GT: A → B → C → D → E  (4 edges)
-    Pred: correct track + self-loops on B, C, D
+    GT: N0 → N1 → N2 → N3 → N4  (4 edges)
+    Pred: correct track + self-loops on N1, N2, N3
 
-    Each self-loop on interior node X: X.out_deg>0 → out_valid=True → penalized.
-    intersection=4, valid_pred=7, gt=4 → 4/(4+7-4)=4/7
+    A self-loop has source == target, so t_target - t_source == 0. Such edges are
+    filtered out entirely before scoring, so they are invisible: score stays 1.0.
     """
     nodes = {f"N{i}": {"t": i, "z": 0.0, "y": 0.0, "x": float(i)} for i in range(5)}
     gt_edges = [(f"N{i}", f"N{i+1}") for i in range(4)]
     gt = _build_graph(nodes, gt_edges)
     pred = _build_graph(nodes, gt_edges + [("N1", "N1"), ("N2", "N2"), ("N3", "N3")])
     score = _jaccard_of(pred, gt, max_distance=1.0)
-    assert score == pytest.approx(4 / 7), f"Self-loops should be penalized, got {score:.4f}"
+    assert score == pytest.approx(1.0), f"Self-loops should be dropped, got {score:.4f}"
 
 
 def test_reverse_edge_at_boundary_invisible():
@@ -964,14 +979,20 @@ def test_reverse_edge_at_boundary_invisible():
     assert score == pytest.approx(1.0), f"Reverse boundary edge should be invisible, got {score:.4f}"
 
 
-def test_dense_bipartite_cross_edges_penalized():
-    """Full bipartite graph between timeframes: cross-edges are correctly penalized.
+def test_dense_bipartite_cross_edges_capped_by_id():
+    """Full bipartite graph between timeframes: the out-degree cap keeps 2 edges/source.
 
     GT: A0→B0, A1→B1, A2→B2  (3 independent tracks)
-    Pred: full 3×3 bipartite = 9 edges (3 correct + 6 FP)
+    Pred: full 3×3 bipartite = 9 edges. Each Ai has 3 outgoing edges, so the cap
+    keeps its two lowest edge ids and drops the third.
 
-    Each Ai has out_deg=1 in GT → all edges from Ai have out_valid=True → penalized.
-    intersection=3, valid_pred=9, gt=3 → 3/(3+9-3)=3/9=1/3
+    Edges are inserted in (i, j) order, so Ai's edges have ids [3i, 3i+1, 3i+2]:
+      A0: A0→B0(0,TP), A0→B1(1,FP)  kept | A0→B2(2) dropped
+      A1: A1→B0(3,FP), A1→B1(4,TP)  kept | A1→B2(5) dropped
+      A2: A2→B0(6,FP), A2→B1(7,FP)  kept | A2→B2(8,TP) dropped
+
+    The cap is blind to correctness, so A2's true edge A2→B2 (highest id) is dropped:
+    intersection=2, valid_pred=6, gt=3 → 2/(3+6-2) = 2/7.
     """
     nodes = {}
     for i in range(3):
@@ -980,7 +1001,7 @@ def test_dense_bipartite_cross_edges_penalized():
     gt = _build_graph(nodes, [(f"A{i}", f"B{i}") for i in range(3)])
     pred = _build_graph(nodes, [(f"A{i}", f"B{j}") for i in range(3) for j in range(3)])
     score = _jaccard_of(pred, gt, max_distance=1.0)
-    assert score == pytest.approx(1 / 3), f"Dense bipartite should score 1/3, got {score:.4f}"
+    assert score == pytest.approx(2 / 7), f"Dense bipartite should score 2/7, got {score:.4f}"
 
 
 def test_skip_connection_scores_zero():
@@ -1046,11 +1067,16 @@ def test_correct_track_with_many_unmatched_noise_edges():
     assert score == pytest.approx(1.0), f"Unmatched noise should be invisible, got {score:.4f}"
 
 
-def test_hub_with_extra_children_penalized():
-    """GT hub with out_deg=5; pred adds 5 extra children → penalized.
+def test_hub_out_degree_capped_at_two():
+    """A high-out-degree hub is capped to its two lowest-id edges.
 
-    All hub's outgoing edges have out_valid=True (hub.out_deg=5).
-    intersection=5, valid_pred=10, gt=5 → 5/(5+10-5)=0.5
+    GT hub has out_deg=5 (C0..C4); pred adds 5 more children (F0..F4). The
+    out-degree cap keeps only the two lowest edge ids per source, regardless of
+    the (unrealistic) GT out-degree.
+
+    Edges are inserted GT-first, so hub's edges are C0(0)..C4(4), F0(5)..F4(9).
+    The cap keeps C0(0), C1(1) — both matched — and drops the other 8:
+    intersection=2, valid_pred=2, gt=5 → 2/(5+2-2) = 2/5.
     """
     import copy
 
@@ -1066,7 +1092,7 @@ def test_hub_with_extra_children_penalized():
         pred_nodes[f"F{i}"] = {"t": 1, "z": 100.0 + i, "y": 100.0, "x": 100.0}
     pred = _build_graph(pred_nodes, gt_e + [("hub", f"F{i}") for i in range(5)])
     score = _jaccard_of(pred, gt, max_distance=1.0)
-    assert score == pytest.approx(0.5), f"Extra hub children should be penalized, got {score:.4f}"
+    assert score == pytest.approx(2 / 5), f"Hub should be capped to 2 edges, got {score:.4f}"
 
 
 def test_nan_coordinates_no_match():

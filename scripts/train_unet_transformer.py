@@ -794,6 +794,7 @@ def train_epoch(
     When *max_iters* is set, the loader is cycled repeatedly until that many
     iterations have been performed, regardless of dataset size.
     """
+    scaler = torch.amp.GradScaler(device)
     model.train()
     total_edge_loss = 0.0
     total_det_loss = 0.0
@@ -886,9 +887,13 @@ def train_epoch(
         t_forward += t2 - t1
 
         optimizer.zero_grad()
-        loss.backward()
+        scaler.scale(loss).backward()
+        # loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        optimizer.step()
+        scaler.scale(loss).backward()
+        # optimizer.step()
+        
+        scaler.update()
 
         torch.cuda.synchronize()
         t3 = time.perf_counter()

@@ -827,74 +827,74 @@ def train_epoch(
         t_data += t1 - t0
 
         B, W = imgs.shape[:2]
+        with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
+            # --- 1. Encode: UNet features + detection logits --------------------
+            unet_out, det_logits = model.encode(imgs)
+            # unet_out: (B, W, C, *spatial),  det_logits: list of W × (B, 1, *spatial)
 
-        # --- 1. Encode: UNet features + detection logits --------------------
-        unet_out, det_logits = model.encode(imgs)
-        # unet_out: (B, W, C, *spatial),  det_logits: list of W × (B, 1, *spatial)
+            # --- 2. Detection loss over all W frames ---------------------------
+            det_losses = [
+                compute_detection_loss(
+                    det_logits[i], coords[:, i], masks[:, i],
+                    det_neg_weight,
+                )
+                for i in range(W)
+            ]
+            det_loss = sum(det_losses) / W
 
-        # --- 2. Detection loss over all W frames ---------------------------
-        det_losses = [
-            compute_detection_loss(
-                det_logits[i], coords[:, i], masks[:, i],
-                det_neg_weight,
-            )
-            for i in range(W)
-        ]
-        det_loss = sum(det_losses) / W
+            # --- 3. Per-frame detect → match → index UNet features -------------
+            frame_det: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor,
+                                list[torch.Tensor], torch.Tensor]] = []
+            for i in range(W):
+                det_c, det_p, det_m, matches = detect_and_match(
+                    det_logits[i], coords[:, i], masks[:, i],
+                    image_shape,
+                    voxel_size=voxel_size,
+                    pool_kernel_um=pool_kernel_um,
+                    frame_index=i, window_size=W,
+                )
+                unet_feat = model._index_features(
+                    unet_out[:, i], det_c, det_m,
+                )
+                frame_det.append((det_c, det_p, det_m, matches, unet_feat))
 
-        # --- 3. Per-frame detect → match → index UNet features -------------
-        frame_det: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor,
-                              list[torch.Tensor], torch.Tensor]] = []
-        for i in range(W):
-            det_c, det_p, det_m, matches = detect_and_match(
-                det_logits[i], coords[:, i], masks[:, i],
-                image_shape,
-                voxel_size=voxel_size,
-                pool_kernel_um=pool_kernel_um,
-                frame_index=i, window_size=W,
-            )
-            unet_feat = model._index_features(
-                unet_out[:, i], det_c, det_m,
-            )
-            frame_det.append((det_c, det_p, det_m, matches, unet_feat))
+            # --- 4. Per-pair edge prediction and loss -------------------------
+            block_losses = []
+            for i in range(W - 1):
+                ns = frame_det[i][0].shape[1]
+                nt = frame_det[i + 1][0].shape[1]
+                pair_target = build_matched_edge_targets(
+                    frame_det[i][3], frame_det[i + 1][3],
+                    targets[:, i], ns, nt,
+                )
+                edge_logits = model.predict_edges(
+                    frame_det[i][4], frame_det[i + 1][4],
+                    frame_det[i][0] * ds_scale, frame_det[i + 1][0] * ds_scale,
+                    frame_det[i][1], frame_det[i + 1][1],
+                    frame_det[i][2], frame_det[i + 1][2],
+                )
+                block_losses.append(compute_batch_loss(
+                    edge_logits, pair_target,
+                    frame_det[i][2], frame_det[i + 1][2],
+                ))
+            edge_loss = sum(block_losses) / len(block_losses)
 
-        # --- 4. Per-pair edge prediction and loss -------------------------
-        block_losses = []
-        for i in range(W - 1):
-            ns = frame_det[i][0].shape[1]
-            nt = frame_det[i + 1][0].shape[1]
-            pair_target = build_matched_edge_targets(
-                frame_det[i][3], frame_det[i + 1][3],
-                targets[:, i], ns, nt,
-            )
-            edge_logits = model.predict_edges(
-                frame_det[i][4], frame_det[i + 1][4],
-                frame_det[i][0] * ds_scale, frame_det[i + 1][0] * ds_scale,
-                frame_det[i][1], frame_det[i + 1][1],
-                frame_det[i][2], frame_det[i + 1][2],
-            )
-            block_losses.append(compute_batch_loss(
-                edge_logits, pair_target,
-                frame_det[i][2], frame_det[i + 1][2],
-            ))
-        edge_loss = sum(block_losses) / len(block_losses)
+            # --- 5. Combined loss -----------------------------------------------
+            loss = edge_loss + det_loss_weight * det_loss
 
-        # --- 5. Combined loss -----------------------------------------------
-        loss = edge_loss + det_loss_weight * det_loss
+            torch.cuda.synchronize()
+            t2 = time.perf_counter()
+            t_forward += t2 - t1
 
-        torch.cuda.synchronize()
-        t2 = time.perf_counter()
-        t_forward += t2 - t1
-
-        optimizer.zero_grad()
-        scaler.scale(loss).backward()
-        # loss.backward()
-        scaler.unscale_(optimizer) 
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        scaler.step(optimizer)
-        # optimizer.step()
-        
-        scaler.update()
+            optimizer.zero_grad()
+            scaler.scale(loss).backward()
+            # loss.backward()
+            scaler.unscale_(optimizer) 
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            scaler.step(optimizer)
+            # optimizer.step()
+            
+            scaler.update()
 
         torch.cuda.synchronize()
         t3 = time.perf_counter()

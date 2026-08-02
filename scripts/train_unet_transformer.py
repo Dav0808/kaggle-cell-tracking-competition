@@ -827,8 +827,8 @@ def train_epoch(
         t_data += t1 - t0
 
         B, W = imgs.shape[:2]
-        with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
-            # --- 1. Encode: UNet features + detection logits --------------------
+        with torch.amp.autocast(device_type="cuda", dtype=torch.float16):    
+        # --- 1. Encode: UNet features + detection logits --------------------
             unet_out, det_logits = model.encode(imgs)
             # unet_out: (B, W, C, *spatial),  det_logits: list of W × (B, 1, *spatial)
 
@@ -882,19 +882,19 @@ def train_epoch(
             # --- 5. Combined loss -----------------------------------------------
             loss = edge_loss + det_loss_weight * det_loss
 
-            torch.cuda.synchronize()
-            t2 = time.perf_counter()
-            t_forward += t2 - t1
+        torch.cuda.synchronize()
+        t2 = time.perf_counter()
+        t_forward += t2 - t1
 
-            optimizer.zero_grad()
-            scaler.scale(loss).backward()
-            # loss.backward()
-            scaler.unscale_(optimizer) 
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            scaler.step(optimizer)
-            # optimizer.step()
-            
-            scaler.update()
+        optimizer.zero_grad()
+        scaler.scale(loss).backward()
+        # loss.backward()
+        scaler.unscale_(optimizer) 
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        scaler.step(optimizer)
+        # optimizer.step()
+        
+        scaler.update()
 
         torch.cuda.synchronize()
         t3 = time.perf_counter()

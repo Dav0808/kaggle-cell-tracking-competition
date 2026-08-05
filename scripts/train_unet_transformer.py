@@ -59,15 +59,15 @@ def compute_loss(logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
     mask = active_rows.unsqueeze(1) | active_cols.unsqueeze(0)
     if not mask.any():
         return torch.tensor(0.0, requires_grad=True, device=logits.device)
+    with torch.amp.autocast(device_type="cuda", enabled=False):
+        probs = torch.softmax(logits, dim=0)  # dim=0 intentional: divisions allowed, merges aren't
+        bce = F.binary_cross_entropy(probs, target, reduction="none")
+        p_t = probs * target + (1 - probs) * (1 - target)
+        loss = ((1 - p_t) ** 2) * bce
 
-    probs = torch.softmax(logits, dim=0)  # dim=0 intentional: divisions allowed, merges aren't
-    bce = F.binary_cross_entropy(probs, target, reduction="none")
-    p_t = probs * target + (1 - probs) * (1 - target)
-    loss = ((1 - p_t) ** 2) * bce
-
-    div_rows = target.sum(dim=1) > 1
-    weight = torch.ones_like(loss)
-    weight[div_rows] = 1.0
+        div_rows = target.sum(dim=1) > 1
+        weight = torch.ones_like(loss)
+        weight[div_rows] = 1.0
 
     return (loss * weight)[mask].mean()
 

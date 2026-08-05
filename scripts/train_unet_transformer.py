@@ -60,6 +60,8 @@ def compute_loss(logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
     if not mask.any():
         return torch.tensor(0.0, requires_grad=True, device=logits.device)
     with torch.amp.autocast(device_type="cuda", enabled=False):
+        logits = logits.float()
+        target = target.float()
         probs = torch.softmax(logits, dim=0)  # dim=0 intentional: divisions allowed, merges aren't
         bce = F.binary_cross_entropy(probs, target, reduction="none")
         p_t = probs * target + (1 - probs) * (1 - target)

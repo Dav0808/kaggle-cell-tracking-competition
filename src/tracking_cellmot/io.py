@@ -196,7 +196,8 @@ def _process_on_gpu(
             q2 = np.float32(q2)
 
     # 2. Transfer raw float32 to GPU once (pinned memory for faster DMA)
-    tensor = torch.from_numpy(image).pin_memory().to(torch_device, non_blocking=True)
+    # tensor = torch.from_numpy(image).pin_memory().to(torch_device, non_blocking=True)
+    tensor = torch.from_numpy(image).pin_memory()
 
     # 3. Apply normalization on GPU
     if normalize:

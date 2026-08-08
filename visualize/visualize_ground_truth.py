@@ -6,6 +6,11 @@ Press the "Next Dataset" button to advance to the next dataset.
 
 Usage:
     uv run visualize/visualize_ground_truth.py
+    
+    ## run this command to start napari
+    LIBGL_ALWAYS_SOFTWARE=1 QT_QPA_PLATFORM=wayland \
+uv run visualize/visualize_ground_truth.py \
+--data-dir ~/kaggle-bio/train
 """
 
 import argparse

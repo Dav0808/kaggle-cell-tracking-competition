@@ -26,6 +26,7 @@ import torch.nn.functional as F
 import zarr
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
+from transformers import get_cosine_schedule_with_warmup
 
 import tracksdata as td
 
@@ -786,6 +787,8 @@ def train_epoch(
     loader: DataLoader,
     optimizer: torch.optim.Optimizer,
     device: torch.device,
+    scaler: torch.amp.GradScaler,
+    scheduler: get_cosine_schedule_with_warmup,
     det_loss_weight: float = 0.1,
     det_neg_weight: float = 0.1,
     max_iters: int | None = None,
@@ -796,7 +799,6 @@ def train_epoch(
     When *max_iters* is set, the loader is cycled repeatedly until that many
     iterations have been performed, regardless of dataset size.
     """
-    scaler = torch.amp.GradScaler(device)
     model.train()
     total_edge_loss = 0.0
     total_det_loss = 0.0
@@ -897,6 +899,7 @@ def train_epoch(
         # optimizer.step()
         
         scaler.update()
+        scheduler.step()
 
         torch.cuda.synchronize()
         t3 = time.perf_counter()
@@ -1167,6 +1170,17 @@ def train(
     print(f"Model parameters: {n_params:,}", flush=True)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
+    
+    n_tot_epochs = 50
+    total_steps = len(train_loader)*n_tot_epochs
+    warmup_steps = round(0.05*total_steps)
+    
+    scheduler = get_cosine_schedule_with_warmup(
+    optimizer,
+    num_warmup_steps=warmup_steps,
+    num_training_steps=total_steps,
+)
+    scaler = torch.amp.GradScaler(device)
     best_score = 0.0
     if resume_path is not None:
         ckpt = torch.load(resume_path, map_location=device, weights_only=True)
@@ -1179,8 +1193,13 @@ def train(
         model.load_state_dict(state)
         if "optimizer" in ckpt:
             optimizer.load_state_dict(ckpt["optimizer"])
+        if "scaler" in ckpt:
+                    scaler.load_state_dict(ckpt["scaler"])
+        if "scheduler" in ckpt:
+            scheduler.load_state_dict(ckpt["scheduler"])
         if "best_score" in ckpt:
             best_score = ckpt["best_score"]
+            
         print(f"  Resumed from {resume_path}", flush=True)
     
     print(f"Starting training for {n_epochs} epochs (batch_size={batch_size})...", flush=True)
@@ -1192,7 +1211,7 @@ def train(
     for epoch in pbar:
         t0 = time.monotonic()
         edge_loss, det_loss = train_epoch(
-            model, train_loader, optimizer, device, det_loss_weight, det_neg_weight,
+            model, train_loader, optimizer, device, scaler, scheduler, det_loss_weight, det_neg_weight,
             max_iters=max_iters, pool_kernel_um=pool_kernel_um,
         )
         train_time = time.monotonic() - t0
@@ -1213,6 +1232,8 @@ def train(
             torch.save(
                 {"model": model_state,
                  "optimizer": optimizer.state_dict(),
+                 "scaler": scaler.state_dict(),
+                 "scheduler": scheduler.state_dict(),
                  "best_score": best_score},
                 save_path,
             )

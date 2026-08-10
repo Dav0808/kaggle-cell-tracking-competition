@@ -1249,7 +1249,9 @@ def train(
 
     print(f"\nBest score (acc*recall): {best_score:.4f}, saved to {save_path}", flush=True)
     if save_path.exists():
-        state = torch.load(save_path, map_location=device, weights_only=True)
+        # state = torch.load(save_path, map_location=device, weights_only=True)
+        ckpt =  torch.load(save_path, map_location=device, weights_only=True)
+        state = ckpt["model"]
         if isinstance(model.unet, nn.DataParallel):
             state = {
                 (k.replace("unet.", "unet.module.", 1) if k.startswith("unet.") else k): v

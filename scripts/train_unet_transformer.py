@@ -1208,12 +1208,10 @@ def train(
             best_score = score
             # Normalise any DataParallel "unet.module." prefix to "unet." so the
             # checkpoint loads on a single GPU (e.g. in the prediction script).
-            model_state = {
-                k.replace("unet.module.", "unet.", 1): v
-                for k, v in model.state_dict().items()
-            }
+            
+            model_state = { k.replace("unet.module.", "unet.", 1): v for k, v in model.state_dict().items()}
             torch.save(
-                {"model":{ k.replace("unet.module.", "unet.", 1): v for k, v in model.state_dict().items()},
+                {"model": model_state,
                  "optimizer": optimizer.state_dict(),
                  "best_score": best_score},
                 save_path,

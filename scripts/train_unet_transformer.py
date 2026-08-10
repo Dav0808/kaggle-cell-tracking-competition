@@ -62,6 +62,7 @@ def compute_loss(logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
     with torch.amp.autocast(device_type="cuda", enabled=False):
         logits = logits.float()
         target = target.float()
+        print("shape of logits:")
         probs = torch.softmax(logits, dim=0)  # dim=0 intentional: divisions allowed, merges aren't
         bce = F.binary_cross_entropy(probs, target, reduction="none")
         p_t = probs * target + (1 - probs) * (1 - target)
@@ -1018,6 +1019,7 @@ def train(
     unet_out_channels: int = 32,
     unet_layers: list[int] | None = None,
     unet_weights: Path | None = None,
+    resume_path: Path | None = None,
     downsample: tuple[int, ...] = (1, 4, 4),
     det_loss_weight: float = 1e1,
     det_neg_weight: float = 1e-2,
@@ -1166,9 +1168,24 @@ def train(
     print(f"Model parameters: {n_params:,}", flush=True)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
+    best_score = 0.0
+    if resume_path is not None:
+        ckpt = torch.load(resume_path, map_location=device, weights_only=True)
+        state = ckpt["model"] if "model" in ckpt else ckpt  # backward-compat with old checkpoints
+        if isinstance(model.unet, nn.DataParallel):
+            state = {
+                (k.replace("unet.", "unet.module.", 1) if k.startswith("unet.") else k): v
+                for k, v in state.items()
+            }
+        model.load_state_dict(state)
+        if "optimizer" in ckpt:
+            optimizer.load_state_dict(ckpt["optimizer"])
+        if "best_score" in ckpt:
+            best_score = ckpt["best_score"]
+        print(f"  Resumed from {resume_path}", flush=True)
+    
     print(f"Starting training for {n_epochs} epochs (batch_size={batch_size})...", flush=True)
 
-    best_score = 0.0
     save_path = output_dir / "edge_predictor_best.pth"
     pbar = tqdm(range(n_epochs), desc="Training", disable=False)
     print(f"Detection loss: weight={det_loss_weight}, neg_weight={det_neg_weight}", flush=True)
@@ -1192,8 +1209,14 @@ def train(
             best_score = score
             # Normalise any DataParallel "unet.module." prefix to "unet." so the
             # checkpoint loads on a single GPU (e.g. in the prediction script).
+            model_state = {
+                k.replace("unet.module.", "unet.", 1): v
+                for k, v in model.state_dict().items()
+            }
             torch.save(
-                {k.replace("unet.module.", "unet.", 1): v for k, v in model.state_dict().items()},
+                {"model":{ k.replace("unet.module.", "unet.", 1): v for k, v in model.state_dict().items()},
+                 "optimizer": optimizer.state_dict(),
+                 "best_score": best_score},
                 save_path,
             )
 
@@ -1240,6 +1263,8 @@ def main() -> None:
                         help="Comma-separated UNet channel widths, shallow→deep.")
     parser.add_argument("--unet-weights", type=str, default=None,
                         help="Path to pretrained UNet weights; loaded with strict=False.")
+    parser.add_argument("--resume-path", type=str, default=None,
+                            help="Path to pretrained weights.")
     parser.add_argument("--downsample", type=str, default="1,4,4",
                         help="Comma-separated spatial downsample strides Z,Y,X (default: 1,4,4).")
     parser.add_argument("--det-loss-weight", type=float, default=1e0,
@@ -1268,6 +1293,7 @@ def main() -> None:
     splits_file = Path(args.splits) if args.splits else data_dir / "dataset_splits.json"
     unet_layers = [int(x) for x in args.unet_layers.split(",")]
     unet_weights = Path(args.unet_weights) if args.unet_weights else None
+    resume_path = Path(args.resume_path) if args.resume_path else None
     debug_video = Path(args.debug_video) if args.debug_video else None
     downsample = tuple(int(x) for x in args.downsample.split(","))
 
@@ -1287,6 +1313,7 @@ def main() -> None:
             unet_out_channels=args.unet_out_channels,
             unet_layers=unet_layers,
             unet_weights=unet_weights,
+            resume_path = resume_path,
             downsample=downsample,
             det_loss_weight=args.det_loss_weight,
             det_neg_weight=args.det_neg_weight,

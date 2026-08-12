@@ -193,8 +193,9 @@ def load_model(
         unet_out_channels=config["unet_out_channels"],
         pos_feat_dim=4 * _POS_EMBED_DIM,
     )
+    
+     # state = torch.load(weights_path, map_location=device, weights_only=True)
     ckpt = torch.load(weights_path, map_location=device, weights_only=True)
-    # state = torch.load(weights_path, map_location=device, weights_only=True)
     state = ckpt["model"]
     model.load_state_dict(state)
     model.to(device)

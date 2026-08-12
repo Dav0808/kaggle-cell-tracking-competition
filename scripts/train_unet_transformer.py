@@ -1179,7 +1179,6 @@ def train(
     optimizer,
     num_warmup_steps=warmup_steps,
     num_training_steps=total_steps,
-    last_epoch = 8,
 )
     scaler = torch.amp.GradScaler(device)
     best_score = 0.0

@@ -14,6 +14,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint as _grad_ckpt
+from torch.nn.attention import SDPBackend, sdpa_kernel
 
 
 def _conv_block(in_channels: int, out_channels: int) -> nn.Sequential:
@@ -42,8 +43,11 @@ class _TemporalAttention(nn.Module):
         S = math.prod(spatial)
 
         h = x.reshape(B, T, C, S).permute(0, 3, 1, 2).reshape(B * S, T, C)
+        #h = self.norm(h)
+        # h, _ = self.attn(h, h, h, need_weights=False)
         h = self.norm(h)
-        h, _ = self.attn(h, h, h, need_weights=False)
+        with sdpa_kernel(SDPBackend.MATH):
+            h, _ = self.attn(h, h, h, need_weights=False)
         h = h.reshape(B, S, T, C).permute(0, 2, 3, 1).reshape(B, T, C, *spatial)
         return x + h
 

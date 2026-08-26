@@ -27,6 +27,7 @@ import zarr
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 from transformers import get_cosine_schedule_with_warmup
+from torch.optim.lr_scheduler import ConstantLR
 
 import tracksdata as td
 
@@ -788,7 +789,7 @@ def train_epoch(
     optimizer: torch.optim.Optimizer,
     device: torch.device,
     scaler: torch.amp.GradScaler,
-    scheduler: get_cosine_schedule_with_warmup,
+    scheduler: ConstantLR,
     det_loss_weight: float = 0.1,
     det_neg_weight: float = 0.1,
     max_iters: int | None = None,
@@ -1015,7 +1016,7 @@ def train(
     splits_file: Path,
     method: str = DEFAULT_METHOD,
     n_epochs: int = 50,
-    lr: float = 1e-3,
+    lr: float = 1e-4,
     batch_size: int = 16,
     num_workers: int = 4,  # benchmark_preload.py: 4 workers, no pin_memory is optimal
     unet_out_channels: int = 32,
@@ -1060,6 +1061,11 @@ def train(
             random.Random(0).shuffle(stems)
             n_val = max(1, len(stems) // 10)
             folds = [{"split": 0, "train": stems[n_val:], "test": stems[:n_val]}]
+
+            # create splits.json
+            output_file = Path("splits.json")
+            output_file.write_text(json.dumps(folds, indent=2))
+
             print(f"No splits file at {splits_file}; generated seed-0 split "
                   f"({len(stems) - n_val} train / {n_val} val).", flush=True)
         fold_data = folds[fold]
@@ -1175,10 +1181,9 @@ def train(
     total_steps = len(train_loader)*n_tot_epochs
     warmup_steps = round(0.05*total_steps)
     
-    scheduler = get_cosine_schedule_with_warmup(
+    scheduler = ConstantLR(
     optimizer,
-    num_warmup_steps=warmup_steps,
-    num_training_steps=total_steps,
+    factor=1,
 )
     scaler = torch.amp.GradScaler(device)
     best_score = 0.0
@@ -1195,8 +1200,8 @@ def train(
             optimizer.load_state_dict(ckpt["optimizer"])
         if "scaler" in ckpt:
                     scaler.load_state_dict(ckpt["scaler"])
-        if "scheduler" in ckpt:
-            scheduler.load_state_dict(ckpt["scheduler"])
+        # if "scheduler" in ckpt:
+        #     scheduler.load_state_dict(ckpt["scheduler"])
         if "best_score" in ckpt:
             best_score = ckpt["best_score"]
             

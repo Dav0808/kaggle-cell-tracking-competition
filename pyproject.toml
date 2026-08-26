@@ -21,6 +21,8 @@ dependencies = [
     "napari>=0.8.0",
     "pyqt5>=5.15.11",
     "transformers>=5.15.0",
+    "vastai>=1.5.4",
+    "kaggle>=2.2.4",
 ]
 
 [project.optional-dependencies]

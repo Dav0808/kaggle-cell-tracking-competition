@@ -1229,7 +1229,7 @@ def train(
         )
     
         score, edge_jaccard, adj_edge_jaccard, division_jaccard = predict(data_dir = data_dir, 
-                weights_path=save_path, fold=0, cfg=cfg, splits_file=splits_file, evaluate=True)
+                weights_path=resume_path, fold=0, cfg=cfg, splits_file=splits_file, evaluate=True)
         test_time = time.monotonic() - t0
         is_best = score > best_score
 

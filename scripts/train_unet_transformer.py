@@ -1248,10 +1248,10 @@ def train(
             )
 
         marker = "*" if is_best else " "
-        pbar.set_postfix(edge=f"{edge_loss:.4f}", det=f"{det_loss:.4f}", acc=f"{test_acc:.4f}")
+        pbar.set_postfix(edge=f"{edge_loss:.4f}", det=f"{det_loss:.4f}", edge_score=f"{edge_jaccard:.4f}")
         print(
             f"  Epoch {epoch:3d}/{n_epochs} | edge={edge_loss:.4f} | det={det_loss:.4f} | "
-            f"test_loss={test_loss:.4f} | acc={test_acc:.4f} | recall={test_recall:.4f} | best={best_score:.4f} {marker} | "
+            f"score={score:.4f} | edge_jaccard={adj_edge_jaccard:.4f} | bess_score={best_score:.4f} {marker} | div_jaccard={division_jaccard:.4f} "
             f"train={train_time:.1f}s test={test_time:.1f}s",
             flush=True,
         )

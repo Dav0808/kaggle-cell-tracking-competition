@@ -1281,7 +1281,7 @@ def main() -> None:
     parser.add_argument("--split", type=str, default="0",
                         help="Split index (0-4) or 'all'.")
     parser.add_argument("--epochs", type=int, default=50)
-    parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--lr", type=float, default=1e-2)
     parser.add_argument("--batch-size", type=int, default=16,
                         help="Frames pairs per batch. All images in a fold must share "
                              "the same spatial shape for batch_size > 1.")

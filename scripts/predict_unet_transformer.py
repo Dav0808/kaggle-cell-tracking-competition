@@ -107,6 +107,18 @@ def suppress_output():
             yield
 
 
+
+def get_cfg():
+     cfg = PredictConfig(
+            det_threshold=0.96875,
+            use_ilp=True,
+            ilp_edge_weight=-1,
+            ilp_appearance_weight=0.0,
+            ilp_disappearance_weight=1.5,
+            ilp_division_weight=1,
+        )
+     return cfg
+
 # =============================================================================
 # Graph building
 # =============================================================================
@@ -588,7 +600,7 @@ def predict(
             f"node_recall={s['node_recall']:.4f}  (n={s['n']})",
             flush=True,
         )
-
+        return s['score'], s['edge_jaccard'], s['adj_edge_jaccard'], s['division_jaccard']
 
 # =============================================================================
 # CLI

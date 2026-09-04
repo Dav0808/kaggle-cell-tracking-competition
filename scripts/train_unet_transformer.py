@@ -34,6 +34,7 @@ from tracking_cellmot.io import invert_time_graph, open_dataset
 from tracking_cellmot.models import SimpleNodeTransformer, TemporalUNet3D
 
 from itertools import cycle as _cycle
+from predict_unet_transformer import predict, get_cfg
 
 
 def compute_gt_transition_matrix(
@@ -1194,7 +1195,7 @@ def train(
         if "optimizer" in ckpt:
             optimizer.load_state_dict(ckpt["optimizer"])
         if "scaler" in ckpt:
-                    scaler.load_state_dict(ckpt["scaler"])
+            scaler.load_state_dict(ckpt["scaler"])
         if "scheduler" in ckpt:
             scheduler.load_state_dict(ckpt["scheduler"])
         if "best_score" in ckpt:
@@ -1205,6 +1206,7 @@ def train(
     print(f"Starting training for {n_epochs} epochs (batch_size={batch_size})...", flush=True)
 
     save_path = output_dir / "edge_predictor_best.pth"
+    save_path_prelim = output_dir / "edge_predictor_prelim.pth"
     pbar = tqdm(range(n_epochs), desc="Training", disable=False)
     print(f"Detection loss: weight={det_loss_weight}, neg_weight={det_neg_weight}", flush=True)
 
@@ -1216,12 +1218,19 @@ def train(
         )
         train_time = time.monotonic() - t0
 
+        cfg = get_cfg()
         t0 = time.monotonic()
-        test_loss, test_acc, test_recall = evaluate(model, test_loader, device, pool_kernel_um=pool_kernel_um)
+        
+        ## Save prel model for evaluation
+        model_state = { k.replace("unet.module.", "unet.", 1): v for k, v in model.state_dict().items()}
+        torch.save(
+            {"model": model_state},
+            save_path_prelim,
+        )
+    
+        score, edge_jaccard, adj_edge_jaccard, division_jaccard = predict(data_dir = data_dir, weights_path=save_path_prelim, cfg=cfg, splits_file=splits_file, evaluate=True)
         test_time = time.monotonic() - t0
-
-        score = test_acc * test_recall
-        is_best = score >= best_score
+        is_best = score > best_score
 
         if is_best:
             best_score = score
